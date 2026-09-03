@@ -1,0 +1,67 @@
+# Copy: cp ci.tfvars.example ci.tfvars
+# Usage: terraform init -backend-config=ci.tfbackend
+#        terraform apply -var-file=ci.tfvars
+
+# Confirmed live against the rhelcert tenancy on 2026-09-02.
+tenancy_ocid = "ocid1.tenancy.oc1..aaaaaaaayikwwnfeirfik6fwqdt5rfjfajmwjuj5u34vkbpao5u6hohucnsa"
+
+# rhelcert's home region. IAM/quota/budget resources are tenancy-global
+# regardless of this setting; OKE/VCN/Functions/ONS/Events are regional and
+# will be created here. Change it if the team runs OCI workloads elsewhere.
+region = "us-sanjose-1"
+
+# The "HyperFleet" team compartment (parent of hyperfleet-sandbox/poc/demos).
+# hyperfleet-ci is created as a sibling of those, never inside one of them.
+team_compartment_id = "ocid1.compartment.oc1..aaaaaaaaa53uyu26gzto2ox5znqygzvhm7cemt6kznjkvrx7dzae6g2g4nda"
+
+# Auth: default is a durable API key. For browser SSO instead, set
+# oci_auth = "SecurityToken" and run `oci session authenticate` first.
+# oci_user_ocid         = "ocid1.user.oc1..REPLACE_ME"
+# oci_fingerprint       = "xx:xx:xx:..."
+# oci_private_key_path  = "~/.oci/oci_api_key.pem"
+
+# Confirmed against the rhelcert tenancy on 2026-09-04:
+#   - "standard-e4-core-count" is quota-manageable (are-quotas-supported=true).
+#     Its quota family is "compute-core", NOT "compute" — the statement family
+#     must match the limit's supported-quota-families, or the API rejects it
+#     with "not a valid quota name for service compute".
+#   - container-engine exposes a compartment-quota-manageable "cluster-count"
+#     (family "container-engine"; region limit 15, 0 used) — no soft-check
+#     fallback needed.
+#   - hyperfleet-ci is nested under HyperFleet, so quota statements must use
+#     the compartment path "HyperFleet:hyperfleet-ci" — a bare "hyperfleet-ci"
+#     only resolves for direct children of the tenancy root.
+# Re-verify with `oci limits definition list --compartment-id <tenancy_ocid>
+# --service-name <compute|container-engine>` (check supported-quota-families)
+# if the worker shape changes.
+quota_statements = [
+  "set compute-core quota standard-e4-core-count to 16 in compartment HyperFleet:hyperfleet-ci",
+  "set container-engine quota cluster-count to 2 in compartment HyperFleet:hyperfleet-ci",
+]
+
+budget_amount = 150
+# Prefer a team distribution list over individual addresses. Set the real
+# recipients in your (gitignored) ci.tfvars — don't commit personal addresses here.
+budget_alert_recipients = [
+  "hyperfleet-ci-alerts@example.com",
+]
+
+# Build and push functions/oci-ci-sweep first (see its README), then set the
+# tag you pushed here and its @sha256 digest below (read the digest back with
+# `docker inspect --format='{{index .RepoDigests 0}}'`). Terraform creates the
+# OCIR repository (sweep_container_repository_path output) but does not build
+# or push images. "sjc" is us-sanjose-1's OCIR region key; "axpiwif30tzw" is
+# the rhelcert tenancy's Object Storage/Registry namespace (confirmed
+# 2026-09-02). OCI Functions requires a tag reference in sweep_function_image
+# and rejects a digest reference there ("Image is not a valid docker image
+# name"); the immutable pin goes in sweep_function_image_digest, which is what
+# OCI actually pulls by. Repository immutability (isImmutable) is not supported
+# by the Artifacts API in us-sanjose-1 (confirmed 2026-09-04), so this digest —
+# not the tag — is what guards against an already-deployed function's image
+# being silently swapped.
+sweep_function_image        = "sjc.ocir.io/axpiwif30tzw/oci-ci-sweep:REPLACE_ME_IMAGE_TAG"
+sweep_function_image_digest = "sha256:REPLACE_ME_IMAGE_DIGEST"
+
+sweep_run_window_hours    = 8
+sweep_dry_run             = true # flip to false once verified end to end
+sweep_schedule_recurrence = "0 * * * *"

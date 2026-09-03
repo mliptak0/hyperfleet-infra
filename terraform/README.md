@@ -484,8 +484,13 @@ terraform/
 ├── modules/
 │   ├── cluster/
 │   │   └── gke/            # GKE cluster module
-│   ├── lifecycle/          # Lifecycle enforcer Cloud Function module
+│   ├── lifecycle/          # Lifecycle enforcer Cloud Function module (GCP)
+│   │   └── oci/            # OCI CI compartment sweep function module
+│   ├── compartment/oci/    # OCI compartment module
+│   ├── quota/oci/          # OCI compartment quota policy module
+│   ├── budget/oci/         # OCI budget + email alert-rule module
 │   └── pubsub/             # Google Pub/Sub module
+├── oci/                    # OCI CI compartment stack (see oci/README.md)
 └── envs/
     └── gke/
         └── dev.tfvars.example
