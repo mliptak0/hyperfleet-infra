@@ -698,7 +698,7 @@ validate-maestro: check-helm ## Validate Maestro Helm chart rendering
 validate-authorino: check-helm ## Validate gateway auth templates
 	@echo "Validating Authorino gateway templates..."
 	@for model in onprem oracle; do \
-		out=$$(helm template gw $(HELM_DIR)/hyperfleet-gateway \
+		out=$$(helm template gw $(HELM_DIR)/hyperfleet-gateway --namespace default \
 			--set auth.extAuthz.enabled=true --set tenant.model=$$model \
 			--set auth.oidc.issuerUrl=https://issuer.invalid/oidc 2>&1) \
 			|| { echo "ERROR: render failed for tenantModel=$$model"; echo "$$out"; exit 1; }; \
@@ -708,6 +708,22 @@ validate-authorino: check-helm ## Validate gateway auth templates
 			|| { echo "ERROR ($$model): Authorino instance not rendered"; exit 1; }; \
 		echo "$$out" | awk '/name: envoy.filters.http.ext_authz/{e=NR} /name: envoy.filters.http.router/{r=NR} END{exit !(e>0 && r>0 && e<r)}' \
 			|| { echo "ERROR ($$model): ext_authz must be ordered before router"; exit 1; }; \
+		echo "$$out" | grep -q "kubernetesTokenReview" \
+			|| { echo "ERROR ($$model): hyperfleet-components machine identity (kubernetesTokenReview) not rendered"; exit 1; }; \
+		echo "$$out" | grep -A3 "kubernetesTokenReview:" | grep -q '"hyperfleet-api"' \
+			|| { echo "ERROR ($$model): kubernetesTokenReview audiences does not include hyperfleet-api"; exit 1; }; \
+		subj_pattern=$$(echo "$$out" | sed -n 's/.*value: "\(\^system:serviceaccount:[^"]*\)".*/\1/p') ; \
+		[ -n "$$subj_pattern" ] \
+			|| { echo "ERROR ($$model): restrict-system-subjects pattern not rendered"; exit 1; }; \
+		for sa in nodepools-hyperfleet-sentinel clusters-hyperfleet-sentinel adapter1-hyperfleet-adapter; do \
+			echo "system:serviceaccount:default:$$sa" | grep -Eq "$$subj_pattern" \
+				|| { echo "ERROR ($$model): restrict-system-subjects pattern rejects known-good SA $$sa"; exit 1; }; \
+		done; \
+		for sa in default some-other-sa hyperfleet-api hyperfleet-adapter-lookalike; do \
+			echo "system:serviceaccount:default:$$sa" | grep -Eq "$$subj_pattern" \
+				&& { echo "ERROR ($$model): restrict-system-subjects pattern wrongly accepts unlisted SA $$sa (audience alone must not be the credential)"; exit 1; }; \
+			true; \
+		done; \
 	done
 	@helm template gw $(HELM_DIR)/hyperfleet-gateway --set auth.extAuthz.enabled=true --set tenant.model=onprem --set auth.oidc.issuerUrl=https://issuer.invalid/oidc \
 		| awk '/"x-tenant-project":/{f=1} f&&/when:/{g=1} f&&g&&/selector: auth.identity.project_id/{ok=1} END{exit !ok}' \
@@ -724,7 +740,7 @@ validate-authorino: check-helm ## Validate gateway auth templates
 		|| { echo "ERROR: default localhost host dropped when authorino.hosts is set"; exit 1; }; \
 	echo "$$hosts_out" | grep -q '"gateway.example.com"' \
 		|| { echo "ERROR: configured authorino.hosts entry not rendered"; exit 1; }
-	@echo "OK: Authorino gateway templates valid (ext_authz before router, fail-closed, when-gated optional header, model guard, additive AUTHORINO_HOSTS)"
+	@echo "OK: Authorino gateway templates valid (ext_authz before router, fail-closed, when-gated optional header, model guard, additive AUTHORINO_HOSTS, machine subject allowlist)"
 
 .PHONY: validate-network-policies
 validate-network-policies: check-helm ## Validate network-policies Helm chart rendering

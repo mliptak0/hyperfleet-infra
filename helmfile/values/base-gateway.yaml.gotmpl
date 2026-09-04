@@ -9,6 +9,10 @@ monitoring:
 service:
   type: {{ .Values.gatewayServiceType }}
 
+envoy:
+  logging:
+    level: {{ env "ENVOY_LOG_LEVEL" | default "info" }}
+
 # Active tenant model for the rendered AuthConfig (onprem|oracle). Must stay in
 # lockstep with config.server.tenant.dimensions in base-api values when wired.
 tenant:
@@ -26,16 +30,21 @@ auth:
   oidc:
     issuerUrl: {{ env "OIDC_ISSUER_URL" | default "" | quote }}
 
-  {{/*
-    Authorino matches the AuthConfig against the request authority. The chart
-    defaults to the in-cluster gateway Service DNS + localhost; set AUTHORINO_HOSTS
-    (comma-separated) to add external hostnames (e.g. the gcp LoadBalancer host)
-    so external callers are matched rather than denied by fail-closed host matching.
-  */}}
-  {{- if env "AUTHORINO_HOSTS" }}
+  machineIdentity:
+    audience: {{ .Values.machineIdentityAudience | quote }}
+
   authorino:
+    {{/*
+      Authorino matches the AuthConfig against the request authority. The chart
+      defaults to the in-cluster gateway Service DNS + localhost; set AUTHORINO_HOSTS
+      (comma-separated) to add external hostnames (e.g. the gcp LoadBalancer host)
+      so external callers are matched rather than denied by fail-closed host matching.
+    */}}
+    {{- if env "AUTHORINO_HOSTS" }}
     hosts:
       {{- range (env "AUTHORINO_HOSTS" | splitList ",") }}
       - {{ . | trim | quote }}
       {{- end }}
-  {{- end }}
+    {{- end }}
+    logging:
+      level: {{ env "AUTHORINO_LOG_LEVEL" | default "info" }}

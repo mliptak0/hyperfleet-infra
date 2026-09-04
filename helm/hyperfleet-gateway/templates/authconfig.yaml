@@ -10,8 +10,14 @@
 {{- if not (regexMatch "^https://" .Values.auth.oidc.issuerUrl) }}
 {{- fail (printf "auth.oidc.issuerUrl must be an https:// URL (got: %q)" .Values.auth.oidc.issuerUrl) }}
 {{- end }}
+{{- if not .Values.auth.machineIdentity.allowedComponents }}
+{{- fail "auth.machineIdentity.allowedComponents must not be empty: an empty list renders a restrict-system-subjects pattern that matches no valid SA, but also can't be trusted to fail closed as intended - set it explicitly instead" }}
+{{- end }}
+{{- $allowedComponentsPattern := list }}
+{{- range .Values.auth.machineIdentity.allowedComponents }}
+{{- $allowedComponentsPattern = append $allowedComponentsPattern (regexQuoteMeta .) }}
+{{- end }}
 # Human OIDC tenant policy (stable name; model swap replaces in place).
-# Machine identity: HYPERFLEET-1480 TODOs below.
 apiVersion: authorino.kuadrant.io/v1beta3
 kind: AuthConfig
 metadata:
@@ -29,22 +35,47 @@ spec:
     - {{ . | quote }}
     {{- end }}
   authentication:
-    # TODO(HYPERFLEET-1480): add machine identity - a hyperfleet-machines
-    # kubernetesTokenReview method (audiences: [hyperfleet-api]) plus a
-    # restrict-system-subjects authorization rule matching the adapter/sentinel
-    # ServiceAccounts (selector auth.identity.user.username), keyed off the
-    # x-hyperfleet-system discriminator (auth.identity.hf_system).
+    # Machine identity for adapters/sentinels, via TokenReview
+    # priority must stay below human-jwt's: same-priority methods race, and on
+    # GKE the human OIDC issuer can also sign ServiceAccount tokens, so a race
+    # would let the (faster, local) JWT check misclassify machine callers.
+    "hyperfleet-components":
+      priority: 0
+      kubernetesTokenReview:
+        audiences:
+          - {{ .Values.auth.machineIdentity.audience | quote }}
+      credentials:
+        authorizationHeader: {}
+      defaults:
+        hf_system:
+          value: "true"
     "human-jwt":
+      priority: 1
       jwt:
         # TODO(HYPERFLEET-1485): kind needs mock IdP for oidc.issuerUrl in e2e.
         issuerUrl: {{ .Values.auth.oidc.issuerUrl | quote }}
       credentials:
         authorizationHeader: {}
-      # hf_system default for humans; structure ready for HYPERFLEET-1480 machine method.
       defaults:
         hf_system:
           value: "false"
   authorization:
+    # Restricts machine callers to Sentinel/adapter ServiceAccounts in this
+    # release's namespace - the audience alone is not the credential. Matches
+    # the "-hyperfleet-<component>" suffix from those charts' .fullname
+    # templates rather than enumerating release names (e.g. adapter1,
+    # nodepools), which vary per instance; add new callers via
+    # auth.machineIdentity.allowedComponents (values.yaml).
+    "restrict-system-subjects":
+      when:
+        - selector: auth.identity.hf_system
+          operator: eq
+          value: "true"
+      patternMatching:
+        patterns:
+          - selector: auth.identity.user.username
+            operator: matches
+            value: {{ printf "^system:serviceaccount:%s:.*-hyperfleet-(%s)$" .Release.Namespace ($allowedComponentsPattern | join "|") | quote }}
     # Required tenant claim must be non-empty.
     {{ $cfg.requiredRule | quote }}:
       when:
@@ -59,14 +90,26 @@ spec:
   response:
     success:
       headers:
-        # TODO(HYPERFLEET-1480): machine callers set hf_system to "true".
+        # "true" for machine callers (hyperfleet-components), "false" for humans.
         x-hyperfleet-system:
           plain:
             selector: auth.identity.hf_system
         x-hyperfleet-identity:
+          # when-gated: machine callers have no email claim (avoids "<nil>").
+          when:
+            - selector: auth.identity.email
+              operator: neq
+              value: ""
           plain:
             selector: auth.identity.email
         {{ $cfg.required.header | quote }}:
+          # when-gated: machine callers are exempt from the required claim (see
+          # the {{ $cfg.requiredRule }} authorization rule above) and have no
+          # claim to put here (avoids "<nil>").
+          when:
+            - selector: auth.identity.{{ $cfg.required.claim }}
+              operator: neq
+              value: ""
           plain:
             selector: auth.identity.{{ $cfg.required.claim }}
         {{ $cfg.optional.header | quote }}:

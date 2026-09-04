@@ -264,15 +264,22 @@ Identity configuration lives entirely in the AuthConfig, selected by `TENANT_MOD
 The optional header is injected only when its claim is present, so an absent
 claim is never sent as the literal `<nil>`.
 
-This configuration covers human OIDC callers only. Adapters and sentinels reach
-the API in-cluster and are not authenticated through gateway ext_authz; use
-`JWT_AUTH_ENABLED` (above) for ServiceAccount-token auth on that path.
+This configuration also covers machine callers: adapters and sentinels
+authenticate through the same gateway ext_authz boundary via a dedicated
+`kubernetesTokenReview` identity method (audience `hyperfleet-api`), restricted
+to the Sentinel/adapter ServiceAccounts by an explicit subject allowlist — an
+unlisted in-cluster ServiceAccount with the right audience is still denied,
+the audience alone is not the credential. `EXT_AUTHZ_ENABLED=true` turns on
+their token auth automatically (same effect as `JWT_AUTH_ENABLED`, above, but
+via the gateway instead of in-app JWT validation).
 
 | Variable | Default | Description |
 | ---------- | --------- | ------------- |
 | `EXT_AUTHZ_ENABLED` | `false` | Make the gateway the auth boundary (deploys Authorino + the active AuthConfig and wires Envoy `ext_authz`). Requires the Authorino operator and `OIDC_ISSUER_URL`. |
 | `TENANT_MODEL` | `onprem` | Active tenant model / AuthConfig (`onprem` or `oracle`) |
 | `AUTHORINO_HOSTS` | *(unset)* | Comma-separated extra hostnames the AuthConfig matches (e.g. the LoadBalancer host). Defaults to the in-cluster gateway Service DNS + `localhost`. |
+| `AUTHORINO_LOG_LEVEL` | `info` | Authorino's own log verbosity. |
+| `ENVOY_LOG_LEVEL` | `info` | Envoy's own log verbosity. |
 
 `OIDC_ISSUER_URL` (see above) doubles as the AuthConfig's `issuerUrl`.
 

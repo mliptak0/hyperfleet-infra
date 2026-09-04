@@ -12,6 +12,10 @@ helmDefaults:
 values:
   - namespace: {{ requiredEnv "NAMESPACE" }}
   - chartOrg: {{ env "CHART_ORG" | default "openshift-hyperfleet" }}
+  # Single source of truth for the gateway<->adapter/sentinel kubernetesTokenReview
+  # audience (base-gateway/base-adapter/base-sentinel.yaml.gotmpl) - keep them in
+  # lockstep by changing this instead of overriding any one independently.
+  - machineIdentityAudience: hyperfleet-api
   - charts:
       api:
         chartRef: {{ env "API_CHART_REF" | default "main" }}

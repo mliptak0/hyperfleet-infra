@@ -27,6 +27,16 @@ data:
                             {{- range .Values.envoy.stripHeaders }}
                             - remove: {{ . }}
                             {{- end }}
+                    access_log:
+                      - name: envoy.access_loggers.stdout
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                          log_format:
+                            # Envoy's own default format, but PATH(NQ) instead of
+                            # REQ(X-ENVOY-ORIGINAL-PATH?:PATH) so query strings -
+                            # which may carry tokens or other secrets - aren't logged.
+                            text_format_source:
+                              inline_string: "[%START_TIME%] \"%REQ(:METHOD)% %PATH(NQ)% %PROTOCOL%\" %RESPONSE_CODE% %RESPONSE_FLAGS% %RESPONSE_CODE_DETAILS% %CONNECTION_TERMINATION_DETAILS% \"%UPSTREAM_TRANSPORT_FAILURE_REASON%\" %BYTES_RECEIVED% %BYTES_SENT% %DURATION% %RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% \"%REQ(X-FORWARDED-FOR)%\" \"%REQ(USER-AGENT)%\" \"%REQ(X-REQUEST-ID)%\" \"%REQ(:AUTHORITY)%\" \"%UPSTREAM_HOST%\"\n"
                     http_filters:
                       {{- if .Values.auth.extAuthz.enabled }}
                       # ext_authz runs before the router: Authorino authenticates
@@ -97,7 +107,7 @@ data:
                   - endpoint:
                       address:
                         socket_address:
-                          address: {{ .Values.auth.extAuthz.cluster }}.{{ .Release.Namespace }}.svc.cluster.local
+                          address: {{ printf "%s-authorino-authorization" (include "hyperfleet-gateway.authorinoName" .) }}.{{ .Release.Namespace }}.svc.cluster.local
                           port_value: {{ .Values.auth.extAuthz.port }}
         {{- end }}
         - name: upstream

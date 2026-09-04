@@ -49,6 +49,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Name of the Authorino CR. Single source of truth for authorino.yaml and
+configmap.yaml's ext_authz cluster address, which derive their names from it
+via the operator's naming convention ("<name>-authorino" ServiceAccount,
+"<name>-authorino-authorization" Service).
+*/}}
+{{- define "hyperfleet-gateway.authorinoName" -}}
+authorino
+{{- end }}
+
+{{/*
 Create the name of the ServiceAccount to use.
 */}}
 {{- define "hyperfleet-gateway.serviceAccountName" -}}
