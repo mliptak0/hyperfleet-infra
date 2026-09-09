@@ -32,6 +32,7 @@ BUILD_IMAGES_ENABLED := $(if $(filter $(TRUTHY_VALUES),$(strip $(BUILD_IMAGES)))
 MANIFESTS_DIR    ?= manifests
 HELM_DIR         ?= helm
 TF_DIR           ?= terraform
+OCI_TF_DIR       ?= terraform/oci
 
 GENERATED_RABBITMQ_DIR ?= generated-values-rabbitmq
 GENERATED_DIR ?= generated-values-from-terraform
@@ -52,6 +53,7 @@ AUTHORINO_OPERATOR_MANIFEST       ?= https://raw.githubusercontent.com/Kuadrant/
 AUTHORINO_OPERATOR_MANIFEST_SHA256 ?= ce2bef459d1456cbe462754cad571f87150fc1ad8bee4f1d010eb0db5b0aabdd
 
 LIFECYCLE_DIR        ?= functions/lifecycle-enforcer
+OCI_SWEEP_DIR        ?= functions/oci-ci-sweep
 
 CLEANER_NAMESPACE    ?= $(NAMESPACE)
 CLEANER_SCHEDULE     ?= 0 * * * *
@@ -373,6 +375,22 @@ lint-lifecycle-function: ## Lint the lifecycle enforcer function
 	@command -v go >/dev/null 2>&1 || { echo "ERROR: go is not installed"; exit 1; }
 	cd "$(LIFECYCLE_DIR)" && go vet ./...
 
+# ==== OCI CI Sweep Function Targets ====
+.PHONY: test-oci-sweep-function
+test-oci-sweep-function: ## Run unit tests for the OCI CI compartment sweep function
+	@command -v go >/dev/null 2>&1 || { echo "ERROR: go is not installed"; exit 1; }
+	cd "$(OCI_SWEEP_DIR)" && go test ./... -v
+
+.PHONY: build-oci-sweep-function
+build-oci-sweep-function: ## Build the OCI CI compartment sweep function
+	@command -v go >/dev/null 2>&1 || { echo "ERROR: go is not installed"; exit 1; }
+	cd "$(OCI_SWEEP_DIR)" && go build ./...
+
+.PHONY: lint-oci-sweep-function
+lint-oci-sweep-function: ## Lint the OCI CI compartment sweep function
+	@command -v go >/dev/null 2>&1 || { echo "ERROR: go is not installed"; exit 1; }
+	cd "$(OCI_SWEEP_DIR)" && go vet ./...
+
 .PHONY: add-ttl-labels
 add-ttl-labels: ## Add TTL labels to existing GKE clusters (DRY_RUN=true by default)
 	./scripts/add-ttl-labels.sh
@@ -664,11 +682,12 @@ help: ## Show this help message
 
 # CI-DRY-RUN
 .PHONY: validate-terraform
-validate-terraform: check-terraform ## Validate Terraform syntax and formatting
-	cd $(TF_DIR) && \
-	terraform init -backend=false && \
-	terraform fmt -check -recursive -diff && \
-	terraform validate
+validate-terraform: check-terraform ## Validate Terraform syntax and formatting (all stacks)
+	cd $(TF_DIR) && terraform fmt -check -recursive -diff
+	@for dir in $(TF_DIR) $(OCI_TF_DIR); do \
+		echo "Validating Terraform in $$dir..."; \
+		( cd "$$dir" && terraform init -backend=false && terraform validate ) || exit 1; \
+	done
 
 .PHONY: lint-helm
 lint-helm: check-helm helm-deps ## Lint all Helm charts
@@ -738,7 +757,7 @@ validate-network-policies: check-helm ## Validate network-policies Helm chart re
 	@echo "OK: network-policies chart rendered successfully"
 
 .PHONY: ci-validate
-ci-validate: validate-terraform lint-helm lint-shellcheck ## Ci validate: validate terraform + lint helm + lint shellcheck
+ci-validate: validate-terraform lint-helm lint-shellcheck ## Ci validate: validate terraform (all stacks) + lint helm + lint shellcheck
 
 .PHONY: ci-dry-run
 ci-dry-run: ci-validate ## Ci dry-run: ci-validate + validate maestro + validate authorino + validate network policies

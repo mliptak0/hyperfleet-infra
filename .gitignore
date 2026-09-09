@@ -13,6 +13,12 @@
 !**/dev-prow.tfvars
 !**/dev-prow.tfbackend
 
+# OCI CI stack personal config (keep the examples)
+terraform/oci/ci.tfvars
+terraform/oci/ci.tfbackend
+*.tfvars.bak
+*.tfbackend.bak
+
 # Crash logs
 crash.log
 crash.*.log
