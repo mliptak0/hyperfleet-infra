@@ -4,6 +4,9 @@ replicaCount: 2
 
 {{ $obs := eq (env "OBSERVABILITY_ENABLED" | default "false") "true" }}
 {{ $tracing := eq (env "TRACING_ENABLED" | default "false") "true" }}
+{{ $jwtEnabled := eq (env "JWT_AUTH_ENABLED" | default "false") "true" }}
+{{ $tenantIsolationEnabled := eq (env "TENANT_ISOLATION_ENABLED" | default "false") "true" }}
+{{ $tenantModel := env "TENANT_MODEL" | default "onprem" }}
 {{ if or $obs $tracing }}
 monitoring:
   {{ if $obs }}
@@ -79,19 +82,42 @@ config:
       spec_schema_name: WifConfigSpec
   {{/*
     Auth boundary: when EXT_AUTHZ_ENABLED=true the gateway (Envoy + Authorino)
-    is the authentication boundary - it validates human OIDC callers and injects
-    trusted tenant headers, so in-app JWT stays OFF here (chart default).
+    authenticates humans (OIDC) and machines (adapters/sentinels) and injects
+    trusted headers, so in-app JWT stays OFF here (chart default).
     TODO(HYPERFLEET-1484): re-enable in-app JWT as defense-in-depth (its
     issuer/audience must match the gateway AuthConfig).
 
-    Tenant enforcement: the API enforces gateway-injected tenant headers via
-    config.server.tenant.dimensions, which must mirror the active tenantModel
-    headers in helm/hyperfleet-gateway/values.yaml. Wire that block here once
-    the API chart renders server.tenant (today it exposes only config.server.jwt).
-    A model swap then moves both sides in lockstep with zero code change.
+    Tenant enforcement: when TENANT_ISOLATION_ENABLED=true, the API enforces
+    gateway-injected tenant headers via config.server.tenant. Its dimensions
+    mirror the active TENANT_MODEL headers in the gateway chart, so a model
+    swap moves both sides in lockstep.
   */}}
-  {{ if eq (env "JWT_AUTH_ENABLED" | default "false") "true" }}
+  {{ if or $tenantIsolationEnabled $jwtEnabled }}
   server:
+    {{ if $tenantIsolationEnabled }}
+    tenant:
+      enabled: true
+      system_header: x-hyperfleet-system
+      dimensions:
+      {{ if eq $tenantModel "onprem" }}
+        - header: x-tenant-org
+          key: org
+          required: true
+        - header: x-tenant-project
+          key: project
+          required: false
+      {{ else if eq $tenantModel "oracle" }}
+        - header: x-tenant-tenancy-ocid
+          key: tenancy_ocid
+          required: true
+        - header: x-tenant-compartment
+          key: compartment_id
+          required: false
+      {{ else }}
+        {{ fail (printf "TENANT_MODEL %q is not supported (expected onprem or oracle)" $tenantModel) }}
+      {{ end }}
+    {{ end }}
+    {{ if $jwtEnabled }}
     jwt:
       enabled: true
       configs:
@@ -114,4 +140,5 @@ config:
           identity_claim: sub
           identity_claim_pattern: "^system:serviceaccount:{{ env "NAMESPACE" | default "hyperfleet-local" }}:.*$"
       {{ end }}
+    {{ end }}
   {{ end }}

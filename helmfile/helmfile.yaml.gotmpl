@@ -12,6 +12,8 @@ helmDefaults:
 values:
   - namespace: {{ requiredEnv "NAMESPACE" }}
   - chartOrg: {{ env "CHART_ORG" | default "openshift-hyperfleet" }}
+  # TokenReview audience shared by gateway AuthConfig and adapter/sentinel clients.
+  - machineIdentityAudience: hyperfleet-api
   - charts:
       api:
         chartRef: {{ env "API_CHART_REF" | default "main" }}

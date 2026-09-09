@@ -203,6 +203,7 @@ Set `TRACING_ENABLED=true` and `OBSERVABILITY_ENABLED=true`.
 | `OBSERVABILITY_ENABLED` | `false` | `false` | Set to `true` to deploy kube-prometheus-stack (Prometheus + Grafana) and enable ServiceMonitors |
 | `TRACING_ENABLED` | `false` | `false` | Set to `true` to deploy Tempo + OpenTelemetry Collector and enable OTLP tracing (requires `OBSERVABILITY_ENABLED=true`) |
 | `MONITORING_NAMESPACE` | `monitoring` | `monitoring` | Namespace for the observability helmfile releases |
+| `TENANT_ISOLATION_ENABLED` | `false` | `false` | Enforce API data isolation from trusted gateway tenant headers; requires `EXT_AUTHZ_ENABLED=true` |
 
 ### JWT Authentication (optional)
 
@@ -217,7 +218,7 @@ When `JWT_AUTH_ENABLED=true`, the template auto-detects the backend based on `OI
 - **Kind** (no `OIDC_ISSUER_URL`): the API validates tokens from the in-cluster K8s OIDC provider. No extra config needed.
 - **GKE** (with `OIDC_ISSUER_URL`): the API validates JWTs from two issuers: the GKE cluster (for sentinel/adapter SA tokens with audience `hyperfleet-api`) and Google accounts (for human callers).
 
-In both cases, **Sentinels** and **Adapters** mount a projected ServiceAccount token with audience `hyperfleet-api` and attach it as a bearer token on every API call.
+In both cases, **Sentinels** and **Adapters** mount a projected ServiceAccount token with audience `hyperfleet-api`. Direct in-app JWT authentication expects the `Bearer` authorization scheme. Gateway authentication uses the distinct `ServiceAccount` scheme described below.
 
 `OIDC_ISSUER_URL` is cluster-specific. For GCP environments it is populated automatically from `generated-values-from-terraform/oidc.env` after `make install-terraform`. For e2e-gcp (no Terraform), pass it on the CLI.
 
@@ -245,53 +246,148 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/hyperfleet/v1/c
 
 ### Gateway Authentication (Authorino ext_authz)
 
-When `EXT_AUTHZ_ENABLED=true`, the **gateway is the authentication boundary**.
-Envoy calls [Authorino](https://github.com/Kuadrant/authorino) as an external
-authorization service (gRPC `ext_authz`, fail-closed) for every request:
-Authorino validates the caller's OIDC JWT, denies tokens missing the required
-tenant claim (401/403 at the gateway), and injects trusted tenant identity
-headers (`x-tenant-*`, `x-hyperfleet-*`) for the API. Client-supplied copies of
-those headers are stripped by Envoy before ext_authz, so identity cannot be
-forged from outside.
-
-Identity configuration lives entirely in the AuthConfig, selected by `TENANT_MODEL`:
-
-| `TENANT_MODEL` | Required claim → header | Optional claim → header |
-| -------------- | ----------------------- | ----------------------- |
-| `onprem` | `org_id` → `x-tenant-org` | `project_id` → `x-tenant-project` |
-| `oracle` | `tenancy_ocid` → `x-tenant-tenancy-ocid` | `compartment_id` → `x-tenant-compartment` |
-
-The optional header is injected only when its claim is present, so an absent
-claim is never sent as the literal `<nil>`.
-
-This configuration covers human OIDC callers only. Adapters and sentinels reach
-the API in-cluster and are not authenticated through gateway ext_authz; use
-`JWT_AUTH_ENABLED` (above) for ServiceAccount-token auth on that path.
-
-| Variable | Default | Description |
-| ---------- | --------- | ------------- |
-| `EXT_AUTHZ_ENABLED` | `false` | Make the gateway the auth boundary (deploys Authorino + the active AuthConfig and wires Envoy `ext_authz`). Requires the Authorino operator and `OIDC_ISSUER_URL`. |
-| `TENANT_MODEL` | `onprem` | Active tenant model / AuthConfig (`onprem` or `oracle`) |
-| `AUTHORINO_HOSTS` | *(unset)* | Comma-separated extra hostnames the AuthConfig matches (e.g. the LoadBalancer host). Defaults to the in-cluster gateway Service DNS + `localhost`. |
-
-`OIDC_ISSUER_URL` (see above) doubles as the AuthConfig's `issuerUrl`.
-
-**Swapping the tenant model** is a single scripted, zero-code operation:
+Enable gateway authentication when you want every API request to have a valid
+identity before it reaches HyperFleet. Once an OIDC issuer is configured, turn
+it on with:
 
 ```bash
-make switch-tenant-model TENANT_MODEL=oracle
+EXT_AUTHZ_ENABLED=true make install-hyperfleet
 ```
 
-This re-applies the same AuthConfig (stable name `hyperfleet-tenant-policy`) with
-the new model's claims and headers, so tokens issued for the previous model are
-rejected at the gateway.
+With this setting enabled:
 
-> **In-app JWT vs gateway auth.** `EXT_AUTHZ_ENABLED` (gateway) and
-> `JWT_AUTH_ENABLED` (in-app, above) are independent. With the gateway as the
-> auth boundary, in-app JWT stays off by default. Tenant headers injected at the
-> gateway are enforced by the API only when `config.server.tenant.dimensions` is
-> wired in helmfile to match the active `TENANT_MODEL` (see
-> `helmfile/values/base-api.yaml.gotmpl`).
+- human users must send `Authorization: Bearer <token>` from the configured
+  OIDC issuer;
+- adapters and sentinels authenticate automatically with their Kubernetes
+  ServiceAccount tokens as `Authorization: ServiceAccount <token>`;
+- unknown ServiceAccounts and unauthenticated requests are denied;
+- human identity and tenant information is passed to the API in trusted
+  headers; and
+- requests are denied if the authentication service is unavailable or does
+  not respond in time.
+
+<details>
+<summary>Who can access the API?</summary>
+
+```mermaid
+flowchart LR
+    request["API request"] --> caller{"Who is calling?"}
+    caller -->|Human| human{"Valid OIDC token with required tenant claim?"}
+    caller -->|Adapter or sentinel| machine{"Valid token from an allowed ServiceAccount?"}
+    human -->|Yes| allowed["Request reaches the API"]
+    machine -->|Yes| allowed
+    human -->|No| denied["Request denied"]
+    machine -->|No| denied
+```
+
+</details>
+
+#### Before you enable it
+
+Choose an OIDC issuer for human users and confirm that its tokens contain the
+claims required by your tenant model. `OIDC_ISSUER_URL` is required, must start
+with `https://`, and must be reachable from the cluster.
+
+For the regular `gcp` environment, `make install-terraform` generates the
+cluster's issuer configuration automatically. Other environments require you
+to provide the issuer explicitly. In particular, kind does not include a mock
+identity provider, so human login requires an external test issuer.
+
+You do not need to configure credentials manually for adapters and sentinels
+deployed by this Helmfile. Their authentication is enabled automatically and
+their ServiceAccounts are added to the allow-list. The e2e environments also
+include the ServiceAccounts created by the e2e test suite.
+
+The distinct authorization schemes select mutually exclusive Authorino
+authentication methods: `ServiceAccount` invokes Kubernetes TokenReview, while
+`Bearer` invokes human OIDC JWT validation. Unknown schemes are denied. Keep
+`JWT_AUTH_ENABLED=false` when clients use `ServiceAccount`; the API's in-app JWT
+middleware currently accepts only the `Bearer` scheme.
+
+#### Choose a tenant model
+
+`TENANT_MODEL` determines which claims must be present in a human user's token
+and which tenant dimensions the API uses to scope resource access:
+
+| Model | Required claim → API key | Optional claim → API key | Use when |
+| ----- | ------------------------ | ------------------------ | -------- |
+| `onprem` | `org_id` → `org` | `project_id` → `project` | Tenants are organized by organization and optionally project |
+| `oracle` | `tenancy_ocid` → `tenancy_ocid` | `compartment_id` → `compartment_id` | Tenants use OCI tenancy and optionally compartment identifiers |
+
+A user whose token is missing the required claim is denied. The optional claim
+may be omitted.
+
+> [!IMPORTANT]
+> Gateway authentication alone verifies identity and extracts tenant
+> information, but does not enable API data isolation. Set both
+> `EXT_AUTHZ_ENABLED=true` and `TENANT_ISOLATION_ENABLED=true` when tenant
+> separation must be enforced.
+
+#### Deploy
+
+For GCP, first provision Terraform so the issuer URL is generated, then enable
+gateway authentication:
+
+```bash
+make install-terraform
+EXT_AUTHZ_ENABLED=true TENANT_ISOLATION_ENABLED=true make install-hyperfleet
+```
+
+For an environment where you supply the issuer yourself:
+
+```bash
+HELMFILE_ENV=e2e-gcp NAMESPACE=<your-namespace> \
+  EXT_AUTHZ_ENABLED=true \
+  TENANT_ISOLATION_ENABLED=true \
+  OIDC_ISSUER_URL=https://issuer.example.com \
+  TENANT_MODEL=oracle \
+  make install-hyperfleet
+```
+
+The deployment command ensures that the shared Authorino operator is installed
+before deploying HyperFleet. It serves the whole cluster, so do not uninstall
+it while another HyperFleet namespace is using gateway authentication.
+
+#### Settings
+
+| Variable | Default | When to set it |
+| -------- | ------- | -------------- |
+| `EXT_AUTHZ_ENABLED` | `false` | Set to `true` to require authentication at the gateway |
+| `TENANT_ISOLATION_ENABLED` | `false` | Set to `true` to scope API resource access using trusted gateway headers; requires `EXT_AUTHZ_ENABLED=true` |
+| `OIDC_ISSUER_URL` | unset | Set to the HTTPS issuer for human tokens; required unless generated by Terraform |
+| `TENANT_MODEL` | `onprem` | Set to `oracle` when tokens use OCI tenancy claims |
+| `AUTHORINO_HOSTS` | unset | Add comma-separated external gateway hostnames if users access the gateway through them |
+| `AUTHORINO_LOG_LEVEL` | `info` | Increase only when diagnosing authentication problems |
+| `ENVOY_LOG_LEVEL` | `info` | Increase only when diagnosing gateway problems |
+
+Internal gateway DNS names and `localhost` work without `AUTHORINO_HOSTS`. If
+requests through a LoadBalancer or custom DNS name are denied while local
+requests work, add the external hostname, for example:
+
+```bash
+AUTHORINO_HOSTS=api.example.com,api-alt.example.com \
+  EXT_AUTHZ_ENABLED=true \
+  OIDC_ISSUER_URL=https://issuer.example.com \
+  make install-hyperfleet
+```
+
+#### Change the tenant model
+
+Reapply the deployment with the new model:
+
+```bash
+EXT_AUTHZ_ENABLED=true TENANT_ISOLATION_ENABLED=true \
+  OIDC_ISSUER_URL=https://issuer.example.com \
+  make switch-tenant-model TENANT_MODEL=oracle
+```
+
+After the switch, human tokens must contain the new model's required claim.
+
+`EXT_AUTHZ_ENABLED` and `JWT_AUTH_ENABLED` are separate switches. External
+authorization protects requests at the gateway. `JWT_AUTH_ENABLED` enables an
+additional check inside the API. They cannot currently be combined for machine
+callers because the gateway uses the `ServiceAccount` scheme while the API's
+JWT middleware requires `Bearer`.
 
 ### E2E specific variables
 

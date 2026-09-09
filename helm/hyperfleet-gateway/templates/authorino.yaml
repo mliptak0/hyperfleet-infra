@@ -3,7 +3,7 @@
 apiVersion: operator.authorino.kuadrant.io/v1beta1
 kind: Authorino
 metadata:
-  name: authorino
+  name: {{ include "hyperfleet-gateway.authorinoName" . }}
   labels:
     {{- include "hyperfleet-gateway.labels" . | nindent 4 }}
 spec:
@@ -18,4 +18,5 @@ spec:
   oidcServer:
     tls:
       enabled: {{ .Values.auth.authorino.tls.enabled }}
+  logLevel: {{ .Values.auth.authorino.logging.level }}
 {{- end }}

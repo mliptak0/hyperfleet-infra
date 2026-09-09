@@ -107,6 +107,9 @@ envoy:
     perTryTimeout: 15s
     timeout: 45s
 
+  logging:
+    level: info
+
 # -----------------------------------------------------------------------------
 # Authentication — Authorino ext_authz gateway and OIDC settings
 # -----------------------------------------------------------------------------
@@ -114,8 +117,6 @@ auth:
   # Authorino ext_authz (requires make install-authorino-operator).
   extAuthz:
     enabled: false
-    # "<Authorino CR>-authorino-authorization" -> authorino-authorino-authorization
-    cluster: authorino-authorino-authorization
     port: 50051
     timeout: 1s
 
@@ -128,10 +129,28 @@ auth:
       enabled: false
     # Empty: gateway Service DNS + localhost (see authconfig.yaml).
     hosts: []
+    logging:
+      level: info
 
   # OIDC issuer for human-jwt AuthConfig (OIDC_ISSUER_URL).
   oidc:
     issuerUrl: ""
+
+  # Machine identity (adapters/sentinels) via kubernetesTokenReview - see authconfig.yaml.
+  machineIdentity:
+    # Dedicated TokenReview audience; must match the adapter/sentinel auth.audience values.
+    audience: hyperfleet-api
+    # Exact service account names allowed as machine callers (no wildcards): only
+    # these SAs in this namespace are trusted, so an unrelated component can't be
+    # granted access just by matching a naming convention. helmfile/values/base-gateway.yaml.gotmpl
+    # derives this list from .Values.sentinels/.Values.adapters so it stays in sync
+    # with the releases actually deployed per environment; these are standalone-chart defaults.
+    allowedServiceAccounts:
+      - clusters-hyperfleet-sentinel
+      - nodepools-hyperfleet-sentinel
+      - adapter1-hyperfleet-adapter
+      - adapter2-hyperfleet-adapter
+      - adapter3-hyperfleet-adapter
 
 # -----------------------------------------------------------------------------
 # Tenant — active AuthConfig model and per-model claim->header mappings

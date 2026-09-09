@@ -313,11 +313,11 @@ install-repos: check-helmfile-env ## Add all hyperfleet helm repos
 	$(call add-helm-repo,adapter,$(ADAPTER_CHART_REF))
 
 .PHONY: install-hyperfleet
-install-hyperfleet: check-helmfile-env check-hyperfleet-namespace check-jwt-config check-ext-authz-config maybe-install-authorino-operator ## Install all HyperFleet components
+install-hyperfleet: check-helmfile-env check-hyperfleet-namespace check-jwt-config check-ext-authz-config check-tenant-isolation-config maybe-install-authorino-operator ## Install all HyperFleet components
 	helmfile -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) apply
 
 .PHONY: switch-tenant-model
-switch-tenant-model: check-helmfile-env check-ext-authz-config ## Switch the active tenant model (TENANT_MODEL=onprem|oracle); re-applies the gateway AuthConfig and API dimensions together
+switch-tenant-model: check-helmfile-env check-ext-authz-config check-tenant-isolation-config ## Switch the active tenant model (TENANT_MODEL=onprem|oracle); re-applies the gateway AuthConfig and API dimensions together
 	@if [ "$(EXT_AUTHZ_ENABLED)" != "true" ]; then \
 		echo "ERROR: switch-tenant-model requires EXT_AUTHZ_ENABLED=true; with ext_authz off no AuthConfig is deployed and nothing would be switched"; exit 1; \
 	fi
@@ -331,7 +331,7 @@ switch-tenant-model: check-helmfile-env check-ext-authz-config ## Switch the act
 	@echo "OK: tenant model switched to '$(TENANT_MODEL)' (same AuthConfig name replaces the policy; old-model tokens are rejected at the gateway)"
 
 .PHONY: install-api
-install-api: check-helmfile-env check-jwt-config ## Install HyperFleet API
+install-api: check-helmfile-env check-jwt-config check-tenant-isolation-config ## Install HyperFleet API
 	helmfile apply -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) -l component=api
 
 .PHONY: install-sentinels
@@ -593,6 +593,18 @@ check-ext-authz-config: ## Validate gateway auth config when EXT_AUTHZ_ENABLED=t
 		echo "OK: ext_authz config validated (TENANT_MODEL=$(TENANT_MODEL), OIDC_ISSUER_URL set)"; \
 	fi
 
+.PHONY: check-tenant-isolation-config
+check-tenant-isolation-config: ## Validate tenant isolation has a trusted gateway and supported model
+	@if [ "$(TENANT_ISOLATION_ENABLED)" = "true" ]; then \
+		[ "$(EXT_AUTHZ_ENABLED)" = "true" ] \
+			|| { echo "ERROR: TENANT_ISOLATION_ENABLED=true requires EXT_AUTHZ_ENABLED=true so tenant headers come from the trusted Authorino gateway"; exit 1; }; \
+		case "$(TENANT_MODEL)" in \
+			onprem|oracle) ;; \
+			*) echo "ERROR: TENANT_MODEL='$(TENANT_MODEL)' must be 'onprem' or 'oracle'"; exit 1 ;; \
+		esac; \
+		echo "OK: tenant isolation config validated (TENANT_MODEL=$(TENANT_MODEL))"; \
+	fi
+
 .PHONY: check-hyperfleet-namespace
 check-hyperfleet-namespace: ## Create Hyperfleet namespace if it doesn't exist and label it
 	$(call check-dns-label,NAMESPACE)
@@ -717,7 +729,7 @@ validate-maestro: check-helm ## Validate Maestro Helm chart rendering
 validate-authorino: check-helm ## Validate gateway auth templates
 	@echo "Validating Authorino gateway templates..."
 	@for model in onprem oracle; do \
-		out=$$(helm template gw $(HELM_DIR)/hyperfleet-gateway \
+		out=$$(helm template gw $(HELM_DIR)/hyperfleet-gateway --namespace default \
 			--set auth.extAuthz.enabled=true --set tenant.model=$$model \
 			--set auth.oidc.issuerUrl=https://issuer.invalid/oidc 2>&1) \
 			|| { echo "ERROR: render failed for tenantModel=$$model"; echo "$$out"; exit 1; }; \
@@ -727,6 +739,22 @@ validate-authorino: check-helm ## Validate gateway auth templates
 			|| { echo "ERROR ($$model): Authorino instance not rendered"; exit 1; }; \
 		echo "$$out" | awk '/name: envoy.filters.http.ext_authz/{e=NR} /name: envoy.filters.http.router/{r=NR} END{exit !(e>0 && r>0 && e<r)}' \
 			|| { echo "ERROR ($$model): ext_authz must be ordered before router"; exit 1; }; \
+		echo "$$out" | grep -q "kubernetesTokenReview" \
+			|| { echo "ERROR ($$model): hyperfleet-components machine identity (kubernetesTokenReview) not rendered"; exit 1; }; \
+		echo "$$out" | grep -A3 "kubernetesTokenReview:" | grep -q '"hyperfleet-api"' \
+			|| { echo "ERROR ($$model): kubernetesTokenReview audiences does not include hyperfleet-api"; exit 1; }; \
+		subj_pattern=$$(echo "$$out" | sed -n 's/.*value: "\(\^system:serviceaccount:[^"]*\)".*/\1/p') ; \
+		[ -n "$$subj_pattern" ] \
+			|| { echo "ERROR ($$model): restrict-system-subjects pattern not rendered"; exit 1; }; \
+		for sa in nodepools-hyperfleet-sentinel clusters-hyperfleet-sentinel adapter1-hyperfleet-adapter; do \
+			echo "system:serviceaccount:default:$$sa" | grep -Eq "$$subj_pattern" \
+				|| { echo "ERROR ($$model): restrict-system-subjects pattern rejects known-good SA $$sa"; exit 1; }; \
+		done; \
+		for sa in default some-other-sa hyperfleet-api hyperfleet-adapter-lookalike; do \
+			echo "system:serviceaccount:default:$$sa" | grep -Eq "$$subj_pattern" \
+				&& { echo "ERROR ($$model): restrict-system-subjects pattern wrongly accepts unlisted SA $$sa (audience alone must not be the credential)"; exit 1; }; \
+			true; \
+		done; \
 	done
 	@helm template gw $(HELM_DIR)/hyperfleet-gateway --set auth.extAuthz.enabled=true --set tenant.model=onprem --set auth.oidc.issuerUrl=https://issuer.invalid/oidc \
 		| awk '/"x-tenant-project":/{f=1} f&&/when:/{g=1} f&&g&&/selector: auth.identity.project_id/{ok=1} END{exit !ok}' \
@@ -743,7 +771,7 @@ validate-authorino: check-helm ## Validate gateway auth templates
 		|| { echo "ERROR: default localhost host dropped when authorino.hosts is set"; exit 1; }; \
 	echo "$$hosts_out" | grep -q '"gateway.example.com"' \
 		|| { echo "ERROR: configured authorino.hosts entry not rendered"; exit 1; }
-	@echo "OK: Authorino gateway templates valid (ext_authz before router, fail-closed, when-gated optional header, model guard, additive AUTHORINO_HOSTS)"
+	@echo "OK: Authorino gateway templates valid (ext_authz before router, fail-closed, when-gated optional header, model guard, additive AUTHORINO_HOSTS, machine subject allowlist)"
 
 .PHONY: validate-network-policies
 validate-network-policies: check-helm ## Validate network-policies Helm chart rendering

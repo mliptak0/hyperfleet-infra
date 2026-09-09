@@ -9,6 +9,10 @@ monitoring:
 service:
   type: {{ .Values.gatewayServiceType }}
 
+envoy:
+  logging:
+    level: {{ env "ENVOY_LOG_LEVEL" | default "info" }}
+
 # Active tenant model for the rendered AuthConfig (onprem|oracle). Must stay in
 # lockstep with config.server.tenant.dimensions in base-api values when wired.
 tenant:
@@ -26,16 +30,31 @@ auth:
   oidc:
     issuerUrl: {{ env "OIDC_ISSUER_URL" | default "" | quote }}
 
-  {{/*
-    Authorino matches the AuthConfig against the request authority. The chart
-    defaults to the in-cluster gateway Service DNS + localhost; set AUTHORINO_HOSTS
-    (comma-separated) to add external hostnames (e.g. the gcp LoadBalancer host)
-    so external callers are matched rather than denied by fail-closed host matching.
-  */}}
-  {{- if env "AUTHORINO_HOSTS" }}
+  machineIdentity:
+    audience: {{ .Values.machineIdentityAudience | quote }}
+    # Exact SA allow-list, derived from the sentinels/adapters actually declared for
+    # this environment (environments/<env>/{sentinel,adapter}-configs.yaml.gotmpl) so
+    # it can't drift from the releases deployed. See helm/hyperfleet-gateway/values.yaml.
+    allowedServiceAccounts:
+      {{- range .Values.sentinels }}
+      - {{ printf "%s-hyperfleet-sentinel" .name | quote }}
+      {{- end }}
+      {{- range .Values.adapters }}
+      - {{ printf "%s-hyperfleet-adapter" .name | quote }}
+      {{- end }}
+
   authorino:
+    {{/*
+      Authorino matches the AuthConfig against the request authority. The chart
+      defaults to the in-cluster gateway Service DNS + localhost; set AUTHORINO_HOSTS
+      (comma-separated) to add external hostnames (e.g. the gcp LoadBalancer host)
+      so external callers are matched rather than denied by fail-closed host matching.
+    */}}
+    {{- if env "AUTHORINO_HOSTS" }}
     hosts:
       {{- range (env "AUTHORINO_HOSTS" | splitList ",") }}
       - {{ . | trim | quote }}
       {{- end }}
-  {{- end }}
+    {{- end }}
+    logging:
+      level: {{ env "AUTHORINO_LOG_LEVEL" | default "info" }}
