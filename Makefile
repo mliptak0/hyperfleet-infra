@@ -311,11 +311,11 @@ install-repos: check-helmfile-env ## Add all hyperfleet helm repos
 	$(call add-helm-repo,adapter,$(ADAPTER_CHART_REF))
 
 .PHONY: install-hyperfleet
-install-hyperfleet: check-helmfile-env check-hyperfleet-namespace check-jwt-config check-ext-authz-config maybe-install-authorino-operator ## Install all HyperFleet components
+install-hyperfleet: check-helmfile-env check-hyperfleet-namespace check-jwt-config check-ext-authz-config check-tenant-isolation-config maybe-install-authorino-operator ## Install all HyperFleet components
 	helmfile -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) apply
 
 .PHONY: switch-tenant-model
-switch-tenant-model: check-helmfile-env check-ext-authz-config ## Switch the active tenant model (TENANT_MODEL=onprem|oracle); re-applies the gateway AuthConfig and API dimensions together
+switch-tenant-model: check-helmfile-env check-ext-authz-config check-tenant-isolation-config ## Switch the active tenant model (TENANT_MODEL=onprem|oracle); re-applies the gateway AuthConfig and API dimensions together
 	@if [ "$(EXT_AUTHZ_ENABLED)" != "true" ]; then \
 		echo "ERROR: switch-tenant-model requires EXT_AUTHZ_ENABLED=true; with ext_authz off no AuthConfig is deployed and nothing would be switched"; exit 1; \
 	fi
@@ -329,7 +329,7 @@ switch-tenant-model: check-helmfile-env check-ext-authz-config ## Switch the act
 	@echo "OK: tenant model switched to '$(TENANT_MODEL)' (same AuthConfig name replaces the policy; old-model tokens are rejected at the gateway)"
 
 .PHONY: install-api
-install-api: check-helmfile-env check-jwt-config ## Install HyperFleet API
+install-api: check-helmfile-env check-jwt-config check-tenant-isolation-config ## Install HyperFleet API
 	helmfile apply -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) -l component=api
 
 .PHONY: install-sentinels
@@ -573,6 +573,18 @@ check-ext-authz-config: ## Validate gateway auth config when EXT_AUTHZ_ENABLED=t
 			*) echo "ERROR: TENANT_MODEL='$(TENANT_MODEL)' must be 'onprem' or 'oracle'"; exit 1 ;; \
 		esac; \
 		echo "OK: ext_authz config validated (TENANT_MODEL=$(TENANT_MODEL), OIDC_ISSUER_URL set)"; \
+	fi
+
+.PHONY: check-tenant-isolation-config
+check-tenant-isolation-config: ## Validate tenant isolation has a trusted gateway and supported model
+	@if [ "$(TENANT_ISOLATION_ENABLED)" = "true" ]; then \
+		[ "$(EXT_AUTHZ_ENABLED)" = "true" ] \
+			|| { echo "ERROR: TENANT_ISOLATION_ENABLED=true requires EXT_AUTHZ_ENABLED=true so tenant headers come from the trusted Authorino gateway"; exit 1; }; \
+		case "$(TENANT_MODEL)" in \
+			onprem|oracle) ;; \
+			*) echo "ERROR: TENANT_MODEL='$(TENANT_MODEL)' must be 'onprem' or 'oracle'"; exit 1 ;; \
+		esac; \
+		echo "OK: tenant isolation config validated (TENANT_MODEL=$(TENANT_MODEL))"; \
 	fi
 
 .PHONY: check-hyperfleet-namespace

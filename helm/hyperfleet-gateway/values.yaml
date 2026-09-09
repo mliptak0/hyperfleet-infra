@@ -140,13 +140,17 @@ auth:
   machineIdentity:
     # Dedicated TokenReview audience; must match the adapter/sentinel auth.audience values.
     audience: hyperfleet-api
-    # ServiceAccount name suffixes allowed as machine callers, e.g. "sentinel" matches
-    # any SA named "<release>-hyperfleet-sentinel" in this release's own namespace.
-    # Add an entry here - not a values override to the AuthConfig pattern itself -
-    # when a new machine component needs gateway access.
-    allowedComponents:
-      - sentinel
-      - adapter
+    # Exact service account names allowed as machine callers (no wildcards): only
+    # these SAs in this namespace are trusted, so an unrelated component can't be
+    # granted access just by matching a naming convention. helmfile/values/base-gateway.yaml.gotmpl
+    # derives this list from .Values.sentinels/.Values.adapters so it stays in sync
+    # with the releases actually deployed per environment; these are standalone-chart defaults.
+    allowedServiceAccounts:
+      - clusters-hyperfleet-sentinel
+      - nodepools-hyperfleet-sentinel
+      - adapter1-hyperfleet-adapter
+      - adapter2-hyperfleet-adapter
+      - adapter3-hyperfleet-adapter
 
 # -----------------------------------------------------------------------------
 # Tenant — active AuthConfig model and per-model claim->header mappings
