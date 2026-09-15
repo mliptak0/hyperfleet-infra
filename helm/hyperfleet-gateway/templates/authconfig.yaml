@@ -90,6 +90,15 @@ spec:
   response:
     success:
       headers:
+        # hyperfleet-api's JWT handler only recognizes the Bearer scheme. The
+        # ServiceAccount prefix exists solely so Envoy/Authorino can route machine
+        # callers to kubernetesTokenReview instead of JWT validation above; once
+        # authenticated, rewrite it back to Bearer
+        Authorization:
+          when:
+            - predicate: request.headers['authorization'].startsWith('ServiceAccount ')
+          plain:
+            expression: "request.headers['authorization'].replace('ServiceAccount ', 'Bearer ')"
         # "true" for machine callers (hyperfleet-components), "false" for humans.
         x-hyperfleet-system:
           plain:
