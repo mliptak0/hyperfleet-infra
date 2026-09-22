@@ -4,9 +4,19 @@ replicaCount: 2
 
 {{ $obs := eq (env "OBSERVABILITY_ENABLED" | default "false") "true" }}
 {{ $tracing := eq (env "TRACING_ENABLED" | default "false") "true" }}
-{{ $jwtEnabled := eq (env "JWT_AUTH_ENABLED" | default "false") "true" }}
+{{ $mode := .Values.authMode }}
+{{ $jwtEnabled := has $mode (list "API" "EDGE+API") }}
 {{ $tenantIsolationEnabled := eq (env "TENANT_ISOLATION_ENABLED" | default "false") "true" }}
 {{ $tenantModel := env "TENANT_MODEL" | default "onprem" }}
+{{ if and $tenantIsolationEnabled (not (has $mode (list "EDGE" "EDGE+API"))) }}
+{{ fail "TENANT_ISOLATION_ENABLED=true requires AUTH_MODE=EDGE or EDGE+API: the API consumes trusted gateway tenant headers" }}
+{{ end }}
+{{ if and (eq $mode "API") (not (and (regexMatch "^https://[^/]+" .Values.security.kubernetesJWT.issuerUrl) (regexMatch "^https://[^/]+" .Values.security.kubernetesJWT.jwksUrl))) }}
+{{ fail "AUTH_MODE=API requires HTTPS security.kubernetesJWT.issuerUrl and security.kubernetesJWT.jwksUrl values" }}
+{{ end }}
+{{ $allowedSAs := list }}
+{{ range .Values.sentinels }}{{ $allowedSAs = append $allowedSAs (regexQuoteMeta (printf "%s-hyperfleet-sentinel" .name)) }}{{ end }}
+{{ range .Values.adapters }}{{ $allowedSAs = append $allowedSAs (regexQuoteMeta (printf "%s-hyperfleet-adapter" .name)) }}{{ end }}
 {{ if or $obs $tracing }}
 monitoring:
   {{ if $obs }}
@@ -39,15 +49,26 @@ service:
 extraVolumes:
   - name: api-tls
     secret:
-      secretName: hyperfleet-api-server-cert
+      secretName: {{ .Values.security.tls.hyperfleetApiTLSSecretName }}
       items:
         - key: tls.crt
           path: tls.crt
         - key: tls.key
           path: tls.key
+  # The API uses this CA only in EDGE+API to trust Authorino's HTTPS
+  # wristband discovery and JWKS endpoint.
+  - name: gateway-ca
+    secret:
+      secretName: hyperfleet-gateway-ca-cert
+      items:
+        - key: ca.crt
+          path: ca.crt
 extraVolumeMounts:
   - name: api-tls
     mountPath: /etc/hyperfleet/tls
+    readOnly: true
+  - name: gateway-ca
+    mountPath: /etc/hyperfleet/pki
     readOnly: true
 
 config:
@@ -94,26 +115,14 @@ config:
     - kind: WifConfig
       plural: wifconfigs
       spec_schema_name: WifConfigSpec
-  {{/*
-    Auth boundary: when EXT_AUTHZ_ENABLED=true the gateway (Envoy + Authorino)
-    authenticates humans (OIDC) and machines (adapters/sentinels) and injects
-    trusted headers, so in-app JWT stays OFF here (chart default).
-    TODO(HYPERFLEET-1484): re-enable in-app JWT as defense-in-depth (its
-    issuer/audience must match the gateway AuthConfig).
-
-    Tenant enforcement: when TENANT_ISOLATION_ENABLED=true, the API enforces
-    gateway-injected tenant headers via config.server.tenant. Its dimensions
-    mirror the active TENANT_MODEL headers in the gateway chart, so a model
-    swap moves both sides in lockstep.
-  */}}
   server:
     tls:
       enabled: true
       cert_file: /etc/hyperfleet/tls/tls.crt
       key_file: /etc/hyperfleet/tls/tls.key
-    {{ if $tenantIsolationEnabled }}
     tenant:
-      enabled: true
+      enabled: {{ $tenantIsolationEnabled }}
+      {{ if $tenantIsolationEnabled }}
       system_header: x-hyperfleet-system
       dimensions:
       {{ if eq $tenantModel "onprem" }}
@@ -133,28 +142,40 @@ config:
       {{ else }}
         {{ fail (printf "TENANT_MODEL %q is not supported (expected onprem or oracle)" $tenantModel) }}
       {{ end }}
-    {{ end }}
-    {{ if $jwtEnabled }}
-    jwt:
-      enabled: true
-      configs:
-      {{/* GCP OIDC when OIDC_ISSUER_URL is explicitly provided; K8s in-cluster OIDC otherwise */}}
-      {{ if env "OIDC_ISSUER_URL" }}
-        - issuer_url: "{{ env "OIDC_ISSUER_URL" }}"
-          jwk_cert_url: "{{ env "OIDC_JWKS_URL" | default (printf "%s/jwks" (env "OIDC_ISSUER_URL")) }}"
-          audience: hyperfleet-api
-          identity_claim: sub
-          identity_claim_pattern: "^system:serviceaccount:{{ env "NAMESPACE" | default "hyperfleet" }}:.*$"
-        - issuer_url: https://accounts.google.com
-          jwk_cert_url: https://www.googleapis.com/oauth2/v3/certs
-          identity_claim: email
-      {{ else }}
-        - issuer_url: "https://kubernetes.default.svc.cluster.local"
-          jwk_cert_url: "https://kubernetes.default.svc.cluster.local/openid/v1/jwks"
-          jwk_cert_ca_file: "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-          header: "Authorization"
-          audience: hyperfleet-api
-          identity_claim: sub
-          identity_claim_pattern: "^system:serviceaccount:{{ env "NAMESPACE" | default "hyperfleet-local" }}:.*$"
       {{ end }}
-    {{ end }}
+    jwt:
+      enabled: {{ $jwtEnabled }}
+      {{ if $jwtEnabled }}
+      configs:
+      {{ if eq $mode "EDGE+API" }}
+        {{ $issuer := printf "https://authorino-authorino-oidc.%s.svc:8083/%s/hyperfleet-tenant-policy/wristband" .Values.namespace .Values.namespace }}
+        - issuer_url: {{ $issuer | quote }}
+          jwk_cert_url: {{ printf "%s/.well-known/openid-connect/certs" $issuer | quote }}
+          jwk_cert_ca_file: /etc/hyperfleet/pki/ca.crt
+          header: Authorization
+          audience: hyperfleet-api
+          identity_claim: sub
+      {{ else }}
+        # API-only mode validates the configured external issuers directly.
+        # It cannot exchange credentials for wristbands without edge auth.
+        - issuer_url: {{ .Values.security.kubernetesJWT.issuerUrl | quote }}
+          jwk_cert_url: {{ .Values.security.kubernetesJWT.jwksUrl | quote }}
+          jwk_cert_ca_file: {{ .Values.security.kubernetesJWT.caFile | quote }}
+          header: Authorization
+          audience: {{ .Values.machineIdentityAudience | quote }}
+          identity_claim: sub
+          identity_claim_pattern: {{ printf "^system:serviceaccount:%s:(%s)$" .Values.namespace (join "|" $allowedSAs) | quote }}
+        {{ range .Values.security.identityProviders }}
+        {{ if not (and (regexMatch "^https://[^/]+" .issuerUrl) (regexMatch "^https://[^/]+" .jwksUrl)) }}
+        {{ fail "API mode requires HTTPS issuerUrl and jwksUrl for every security.identityProviders entry" }}
+        {{ end }}
+        - issuer_url: {{ .issuerUrl | quote }}
+          jwk_cert_url: {{ .jwksUrl | quote }}
+          audience: {{ required "Every identity provider requires an audience" .audience | quote }}
+          identity_claim: {{ default "sub" .identityClaim | quote }}
+          identity_claim_pattern: {{ default "" .identityClaimPattern | quote }}
+        {{ end }}
+      {{ end }}
+      {{ else }}
+      configs: []
+      {{ end }}
