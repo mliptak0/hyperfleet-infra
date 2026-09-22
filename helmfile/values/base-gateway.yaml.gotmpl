@@ -10,9 +10,7 @@ service:
   type: {{ .Values.gatewayServiceType }}
 
 tls:
-  hyperfleetApiTLSSecretName: hyperfleet-api-server-cert
-  authorinoAuthorizationTLSSecretName: authorino-server-cert
-  authorinoOIDCTLSSecretName: authorino-oidc-server-cert
+{{ toYaml .Values.security.tls | indent 2 }}
 
 envoy:
   logging:
@@ -27,16 +25,12 @@ auth:
   # External authorization (Authorino). When enabled, Envoy authenticates every
   # request through Authorino and injects trusted tenant headers; the Authorino
   # instance and the active AuthConfig are deployed by the gateway chart too.
-  extAuthz:
-    enabled: {{ env "EXT_AUTHZ_ENABLED" | default "false" }}
-
-  # Helmfile resolves the environment-specific issuer. The gateway chart only
-  # receives the resulting URL and remains independent of the mock test setup.
-  oidc:
-    issuerUrl: {{ .Values.oidcIssuerUrl | quote }}
+  mode: {{ .Values.authMode | quote }}
+  identityProviders:
+{{ toYaml .Values.security.identityProviders | indent 4 }}
 
   machineIdentity:
-    audience: {{ .Values.apiAudience | quote }}
+    audience: {{ .Values.machineIdentityAudience | quote }}
     # Exact SA allow-list, derived from the sentinels/adapters actually declared for
     # this environment (environments/<env>/{sentinel,adapter}-configs.yaml.gotmpl) so
     # it can't drift from the releases deployed. See helm/hyperfleet-gateway/values.yaml.
@@ -47,9 +41,6 @@ auth:
       {{- range .Values.adapters }}
       - {{ printf "%s-hyperfleet-adapter" .name | quote }}
       {{- end }}
-
-  humanIdentity:
-    audience: {{ .Values.apiAudience | quote }}
 
   authorino:
     {{/*

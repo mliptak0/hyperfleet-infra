@@ -12,6 +12,7 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: http
+      appProtocol: http
 ---
 # ClusterIP-only, regardless of the main Service type above, so admin/metrics
 # (locked down to /ready and /stats/prometheus, see configmap.yaml) stays

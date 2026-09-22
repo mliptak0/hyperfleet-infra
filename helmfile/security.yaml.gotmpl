@@ -1,0 +1,49 @@
+{{- $defaultKubernetesIssuer := "https://kubernetes.default.svc.cluster.local" -}}
+{{- $kubernetesIssuer := env "KUBERNETES_OIDC_ISSUER_URL" | default $defaultKubernetesIssuer -}}
+{{- $defaultKubernetesCAFile := "" -}}
+{{- if eq $kubernetesIssuer $defaultKubernetesIssuer -}}
+{{- $defaultKubernetesCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt" -}}
+{{- end -}}
+{{- $authMode := env "AUTH_MODE" | default "NONE" -}}
+{{- $edgeAuth := has $authMode (list "EDGE" "EDGE+API") -}}
+{{- $mockIssuer := eq (env "OIDC_ISSUER_MODE" | default "external") "mock" -}}
+{{- $namespace := requiredEnv "NAMESPACE" -}}
+# Shared security inputs for all releases. AUTH_MODE selects authentication.
+security:
+  tls:
+    # The gateway chart owns the namespace-local self-signed trust root.
+    hyperfleetApiTLSSecretName: hyperfleet-api-server-cert
+    authorinoAuthorizationTLSSecretName: authorino-server-cert
+    authorinoOIDCTLSSecretName: authorino-oidc-server-cert
+
+  # Human providers: shared by Authorino in EDGE modes and the API in API mode.
+  # Empty means machine-only authentication. Use SECURITY_VALUES_FILE to supply
+  # multiple providers. jwksUrl is required in API mode (the API has no discovery).
+  {{ if and $edgeAuth $mockIssuer }}
+  identityProviders:
+    - name: human-jwt
+      # The mock is test-only and namespace-local. Direct API mode never uses it.
+      issuerUrl: {{ printf "http://hyperfleet-mock-oidc.%s.svc.cluster.local:8080/default" $namespace | quote }}
+      allowInsecureIssuer: true
+      jwksUrl: ""
+      audience: {{ env "OIDC_AUDIENCE" | default "hyperfleet-api" | quote }}
+      identityClaim: {{ env "OIDC_IDENTITY_CLAIM" | default "sub" | quote }}
+      identityClaimPattern: {{ env "OIDC_IDENTITY_CLAIM_PATTERN" | default "" | quote }}
+  {{ else if env "OIDC_ISSUER_URL" }}
+  identityProviders:
+    - name: human-jwt
+      issuerUrl: {{ env "OIDC_ISSUER_URL" | quote }}
+      jwksUrl: {{ env "OIDC_JWKS_URL" | default "" | quote }}
+      audience: {{ env "OIDC_AUDIENCE" | default "hyperfleet-api" | quote }}
+      identityClaim: {{ env "OIDC_IDENTITY_CLAIM" | default "sub" | quote }}
+      identityClaimPattern: {{ env "OIDC_IDENTITY_CLAIM_PATTERN" | default "" | quote }}
+  {{ else }}
+  identityProviders: []
+  {{ end }}
+
+  # Used only by AUTH_MODE=API for direct validation of projected SA JWTs.
+  # EDGE modes use Kubernetes TokenReview and need no cluster issuer URL.
+  kubernetesJWT:
+    issuerUrl: {{ $kubernetesIssuer | quote }}
+    jwksUrl: {{ env "KUBERNETES_OIDC_JWKS_URL" | default "https://kubernetes.default.svc.cluster.local/openid/v1/jwks" | quote }}
+    caFile: {{ env "KUBERNETES_OIDC_CA_FILE" | default $defaultKubernetesCAFile | quote }}
