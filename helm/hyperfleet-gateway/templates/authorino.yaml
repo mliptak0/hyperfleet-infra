@@ -7,8 +7,8 @@ metadata:
   labels:
     {{- include "hyperfleet-gateway.labels" . | nindent 4 }}
 spec:
-  # Explicitly scope this Authorino instance to AuthConfigs in its own namespace. This
-  # avoids host-claim conflicts between gateway installs in different namespaces (eg. multiple e2e namespaces).
+  # Keep this Authorino instance's default namespace scope explicit. Shared E2E
+  # clusters can conflict if an instance is changed to cluster-wide watching.
   clusterWide: false
   {{- if .Values.auth.authorino.image }}
   # Pin image; operator default may be unpublished on quay.
