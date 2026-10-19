@@ -363,6 +363,11 @@ The deployment command ensures that the shared Authorino operator is installed
 before deploying HyperFleet. It serves the whole cluster, so do not uninstall
 it while another HyperFleet namespace is using gateway authentication.
 
+Although the operator is cluster-wide, each gateway's Authorino instance sets
+`spec.clusterWide: false` and watches AuthConfigs only in its own namespace.
+Multi-namespace deployments depend on this scope to avoid cross-install host
+claim conflicts; verify it when updating the pinned operator.
+
 #### Settings
 
 | Variable | Default | When to set it |
