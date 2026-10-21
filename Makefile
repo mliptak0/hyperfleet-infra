@@ -29,7 +29,7 @@ AUTO_APPROVE_FLAG := $(if $(filter $(TRUTHY_VALUES),$(strip $(AUTO_APPROVE))),-a
 BUILD_IMAGES_ENABLED := $(if $(filter $(TRUTHY_VALUES),$(strip $(BUILD_IMAGES))),1,)
 
 # Authentication has one public control.
-AUTH_MODE ?= NONE
+AUTH_MODE ?= EDGE+API
 EDGE_AUTH_ENABLED := $(if $(filter EDGE EDGE+API,$(strip $(AUTH_MODE))),1,)
 
 

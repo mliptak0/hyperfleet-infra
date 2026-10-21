@@ -295,8 +295,10 @@ change or `uninstall-hyperfleet` removes a previously installed mock issuer.
 
 You do not need to configure credentials manually for adapters and sentinels
 deployed by this Helmfile. Their authentication is enabled automatically and
-their ServiceAccounts are added to the allow-list. The e2e environments also
-include the ServiceAccounts created by the e2e test suite.
+their ServiceAccounts are added to the allow-list. In e2e environments, Helmfile
+installs the `hyperfleet-e2e` support chart, which owns `hyperfleet-e2e-runner`.
+The E2E process requests a machine token for that ServiceAccount. Temporary
+adapters and runner identity are added through e2e-only Helmfile values.
 
 The distinct authorization schemes select mutually exclusive Authorino
 authentication methods: `ServiceAccount` invokes Kubernetes TokenReview, while
@@ -366,7 +368,7 @@ it while another HyperFleet namespace is using gateway authentication.
 
 | Variable | Default | When to set it |
 | -------- | ------- | -------------- |
-| `AUTH_MODE` | `NONE` | One of `NONE`, `EDGE`, `API`, or `EDGE+API` |
+| `AUTH_MODE` | `EDGE+API` | One of `NONE`, `EDGE`, `API`, or `EDGE+API` |
 | `TENANT_ISOLATION_ENABLED` | `false` | Scope API data using trusted gateway headers; requires `AUTH_MODE=EDGE` or `EDGE+API` |
 | `OIDC_ISSUER_MODE` | `external` in all environments | Set `mock` explicitly for development or test deployments |
 | `OIDC_ISSUER_URL` | unset | HTTPS human issuer; API mode also requires `OIDC_JWKS_URL` |
@@ -546,7 +548,7 @@ hyperfleet-infra/
 ├── Makefile                          # Entry point: run 'make help'
 ├── env.gcp, env.kind                 # Variable defaults (GCP: Pub/Sub, LoadBalancer; kind: RabbitMQ, ClusterIP)
 ├── helmfile/                         # Helmfile state: per-env adapter and sentinel lists, adapter configs, value templates
-├── helm/                             # Local charts (gateway, Redis, RabbitMQ, mock OIDC, network policies, ...)
+├── helm/                             # Local charts (gateway, E2E support, Redis, RabbitMQ, mock OIDC, ...)
 ├── manifests/                        # Plain Kubernetes manifests (priority classes, ...)
 ├── scripts/                          # Helper scripts, most run through make targets
 ├── terraform/                        # GKE and shared VPC stacks, OCI CI stack in terraform/oci/ (see terraform/README.md)

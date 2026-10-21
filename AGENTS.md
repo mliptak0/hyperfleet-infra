@@ -68,7 +68,7 @@ Every environment delivers through API → Sentinel → remote adapter → Redis
 
 ## Helm charts
 
-Local charts in `helm/`: `external-dns`, `hyperfleet-gateway`, `mock-oidc`, `namespace-cleaner`, `network-policies`, `rabbitmq`, `redis`. `rabbitmq` and `redis` are dev-only (no persistence, no auth or `guest/guest`) and not production-ready.
+Local charts in `helm/`: `external-dns`, `hyperfleet-e2e`, `hyperfleet-gateway`, `mock-oidc`, `namespace-cleaner`, `network-policies`, `rabbitmq`, `redis`. `hyperfleet-e2e` is installed only in e2e Helmfile environments. `rabbitmq` and `redis` are dev-only (no persistence, no auth or `guest/guest`) and not production-ready.
 
 Required non-standard plugins (`check-helm` and `check-helmfile` verify them):
 
