@@ -12,7 +12,14 @@ else
 	-include env.gcp
 endif
 
+# E2E environments use the namespace-local mock issuer. All development and
+# production-like environments require an explicit external issuer by default.
+E2E_MOCK_OIDC_ENVIRONMENTS := e2e-kind e2e-gcp
+ifneq ($(filter $(HELMFILE_ENV),$(E2E_MOCK_OIDC_ENVIRONMENTS)),)
+OIDC_ISSUER_MODE ?= mock
+else
 OIDC_ISSUER_MODE ?= external
+endif
 
 export
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
