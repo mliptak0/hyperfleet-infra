@@ -321,8 +321,10 @@ may be omitted.
 
 #### Deploy
 
-For GCP, first provision Terraform to generate the required broker values. Use
-an external issuer by default:
+For GCP, enable `use_pubsub` and configure `pubsub_topic_configs` in your
+Terraform variables before provisioning. See [Enable Pub/Sub](terraform/README.md#enable-pubsub).
+Without them, Terraform does not generate the broker values required by
+`HELMFILE_ENV=gcp`. Use an external issuer by default:
 
 ```bash
 make install-terraform
