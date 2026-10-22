@@ -88,6 +88,7 @@ Configuration precedence (highest to lowest):
 | Target | Description |
 | -------- | ------------- |
 | `make install-hyperfleet` | Install all HyperFleet components |
+| `make install-gateway` | Install or update HyperFleet gateway, Authorino, and AuthConfig only |
 | `make install-api` | Install HyperFleet API only |
 | `make install-sentinels` | Install Sentinels only |
 | `make install-adapters` | Install Adapters only |

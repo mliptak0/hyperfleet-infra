@@ -331,6 +331,10 @@ install-repos: check-helmfile-env ## Add all hyperfleet helm repos
 install-hyperfleet: validate-helmfile-config check-hyperfleet-namespace maybe-install-authorino-operator install-cert-manager ensure-kubernetes-oidc-discovery ## Install all HyperFleet components with mandatory request-path TLS
 	helmfile -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) apply
 
+.PHONY: install-gateway
+install-gateway: validate-helmfile-config check-hyperfleet-namespace maybe-install-authorino-operator install-cert-manager ensure-kubernetes-oidc-discovery ## Install or update HyperFleet gateway, Authorino, and AuthConfig only
+	helmfile -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) -l component=gateway apply
+
 .PHONY: switch-tenant-model
 switch-tenant-model: validate-helmfile-config maybe-install-authorino-operator ## Switch the active tenant model; requires AUTH_MODE=EDGE or EDGE+API
 	@if [ -z "$(EDGE_AUTH_ENABLED)" ]; then \
