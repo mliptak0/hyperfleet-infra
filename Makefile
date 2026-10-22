@@ -805,13 +805,13 @@ validate-desire-delivery: check-helm ## Validate the desire delivery render (rem
 			$$0 == "  name: " name { keep = 1 } \
 			END { if (keep) printf "%s", doc }'; \
 	}; \
-	NAMESPACE=hf-validate RUN_ID=hf-validate helmfile -f helmfile/helmfile.yaml.gotmpl -e e2e-kind repos >/dev/null \
+	NAMESPACE=hf-validate RUN_ID=hf-validate OIDC_ISSUER_MODE=mock OIDC_ISSUER_URL= OIDC_JWKS_URL= helmfile -f helmfile/helmfile.yaml.gotmpl -e e2e-kind repos >/dev/null \
 		|| { echo "ERROR: Helmfile desire delivery repository setup failed"; exit 1; }; \
 	for env in e2e-kind e2e-gcp kind gcp; do \
 		ns=hf-validate-$$env; \
 		mode=mock; url=; \
 		if [ "$$env" = gcp ]; then mode=external; url=https://issuer.invalid; fi; \
-		export NAMESPACE=$$ns RUN_ID=$$ns OIDC_ISSUER_MODE=$$mode OIDC_ISSUER_URL=$$url; \
+		export NAMESPACE=$$ns RUN_ID=$$ns OIDC_ISSUER_MODE=$$mode OIDC_ISSUER_URL=$$url OIDC_JWKS_URL=; \
 		out=$$(helmfile -f helmfile/helmfile.yaml.gotmpl -e $$env $$selectors template --skip-deps) \
 			|| { echo "ERROR: Helmfile desire delivery template failed for $$env"; exit 1; }; \
 		adapters=$$(echo "$$out" | sed -n 's/^  name: \(.*\)-hyperfleet-adapter-config$$/\1/p'); \
