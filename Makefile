@@ -350,9 +350,8 @@ switch-tenant-model: validate-helmfile-config maybe-install-authorino-operator #
 	@echo "OK: tenant model switched to '$(TENANT_MODEL)' (same AuthConfig name replaces the policy; old-model tokens are rejected at the gateway)"
 
 .PHONY: install-api
-install-api: validate-helmfile-config check-hyperfleet-namespace install-cert-manager maybe-install-authorino-operator ensure-kubernetes-oidc-discovery ## Install gateway PKI prerequisite and HyperFleet API
-	helmfile apply -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) -l component=gateway
-	helmfile apply -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) -l component=api
+install-api: install-gateway ## Install HyperFleet API with its gateway prerequisite
+	helmfile -f helmfile/helmfile.yaml.gotmpl -e $(HELMFILE_ENV) -l component=api apply
 
 .PHONY: install-sentinels
 install-sentinels: validate-helmfile-config ## Install Hyperfleet Sentinels
